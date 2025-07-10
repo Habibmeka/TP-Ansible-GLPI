@@ -1,0 +1,128 @@
+---
+- name: Installer GLPI sur Debian
+  hosts: glpi_server
+  become: yes
+
+  vars_files:
+    - group_vars/glpi_server.yml
+
+  tasks:
+
+    - name: Mettre à jour les paquets
+      apt:
+        update_cache: yes
+
+    - name: Installer Apache, MariaDB, PHP et dépendances
+      apt:
+        name:
+          - apache2
+          - mariadb-server
+          - php
+          - php-mysql
+          - php-xml
+          - php-mbstring
+          - php-curl
+          - php-gd
+          - php-ldap
+          - php-imap
+          - php-apcu
+          - unzip
+          - wget
+        state: present
+
+    - name: Démarrer et activer Apache et MariaDB
+      systemd:
+        name: "{{ item }}"
+        state: started
+        enabled: yes
+      loop:
+        - apache2
+        - mariadb
+
+    - name: Sécuriser MariaDB - Changer le mot de passe root
+      community.mysql.mysql_user:
+        login_user: root
+        login_password: ""
+        user: root
+        password: "{{ glpi_mysql_root_password }}"
+        host_all: yes
+      ignore_errors: true
+
+    - name: Créer la base de données GLPI
+      community.mysql.mysql_db:
+        name: "{{ glpi_db_name }}"
+        state: present
+        login_user: administrateur
+        login_password: "{{ glpi_mysql_root_password }}"
+
+    - name: Créer l'utilisateur MySQL GLPI
+      community.mysql.mysql_user:
+        name: "{{ glpi_db_user }}"
+        password: "{{ glpi_db_password }}"
+        priv: "{{ glpi_db_name }}.*:ALL"
+        state: present
+        login_user: administrateur
+        login_password: "{{ glpi_mysql_root_password }}"
+
+    - name: Télécharger GLPI depuis GitHub
+      get_url:
+        url: "{{ glpi_download_url }}"
+        dest: "/tmp/glpi-{{ glpi_version }}.tgz"
+        mode: "0644"
+
+    - name: Décompresser GLPI dans /var/www/
+      unarchive:
+        src: "/tmp/glpi-{{ glpi_version }}.tgz"
+        dest: "/var/www/"
+        remote_src: yes
+
+    - name: Mettre les permissions
+      file:
+        path: "/var/www/glpi"
+        state: directory
+        recurse: yes
+        owner: www-data
+        group: www-data
+        mode: "0755"
+
+    - name: Activer mod_rewrite Apache
+      command: a2enmod rewrite
+      args:
+        creates: /etc/apache2/mods-enabled/rewrite.load
+
+    - name: Activer SSL Apache
+      command: a2enmod ssl
+      args:
+        creates: /etc/apache2/mods-enabled/ssl.load
+
+    - name: Créer certificat SSL auto-signé avec openssl
+      command: >
+        openssl req -x509 -nodes -days 365
+        -newkey rsa:2048
+        -keyout /etc/ssl/private/glpi-key.pem
+        -out /etc/ssl/certs/glpi-cert.pem
+        -subj "/CN=glpi.local"
+      args:
+        creates: /etc/ssl/certs/glpi-cert.pem
+
+    - name: Créer vhost SSL pour GLPI
+      copy:
+        dest: "/etc/apache2/sites-available/glpi-ssl.conf"
+        content: |
+          <VirtualHost *:443>
+            ServerAdmin admin@glpi.local
+            DocumentRoot /var/www/glpi
+            SSLEngine on
+            SSLCertificateFile /etc/ssl/certs/glpi-cert.pem
+            SSLCertificateKeyFile /etc/ssl/private/glpi-key.pem
+          </VirtualHost>
+
+    - name: Activer le site SSL
+      shell: a2ensite glpi-ssl.conf
+      args:
+        creates: /etc/apache2/sites-enabled/glpi-ssl.conf
+
+    - name: Redémarrer Apache
+      systemd:
+        name: apache2
+        state: restarted
