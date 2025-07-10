@@ -1,0 +1,10 @@
+#server-integrateur ansible_host=10.5.0.6 ansible_user=server-integrateur
+[glpi_server]
+glpi ansible_host=192.168.1.45 ansible_user=glpi
+
+[server_nester_manager]
+manager-nester ansible_host=192.168.1.130 ansible_user=manager-nester
+
+
+[all:vars]
+ansible_python_interpreter=/usr/bin/python3
